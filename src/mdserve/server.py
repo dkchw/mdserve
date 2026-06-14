@@ -234,21 +234,87 @@ a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
 /* ── Markdown viewer ─────────────────────────────── */
 .md-layout {{
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: var(--sidebar-width, 220px) 1fr;
   gap: 0;
   max-width: 1200px;
   margin: 0 auto;
   min-height: calc(100vh - 48px);
+  position: relative;
+  transition: grid-template-columns 0.2s ease;
+}}
+
+.md-layout.is-dragging {{
+  transition: none !important;
+}}
+
+/* States */
+.md-layout[data-sidebar-state="collapsed"] {{
+  --sidebar-width: 0px;
+}}
+.md-layout[data-sidebar-state="collapsed"] .toc-sidebar {{
+  display: none;
+}}
+.md-layout[data-sidebar-state="collapsed"] .sidebar-resizer {{
+  display: none;
+}}
+.md-layout[data-sidebar-state="collapsed"] .md-content-wrap {{
+  grid-column: 1 / span 2;
+}}
+.md-layout[data-sidebar-state="collapsed"] .md-body {{
+  margin: 0 auto;
+}}
+
+.md-layout[data-sidebar-state="partial"] {{
+  --sidebar-width: 220px;
+}}
+
+.md-layout[data-sidebar-state="expanded"] {{
+  --sidebar-width: 360px;
+}}
+
+/* Resizer */
+.sidebar-resizer {{
+  position: absolute;
+  top: 0;
+  left: var(--sidebar-width, 220px);
+  transform: translateX(-50%);
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--transition);
+  z-index: 10;
+}}
+.sidebar-resizer::after {{
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 2px;
+  height: 100%;
+  background: var(--border);
+  transition: background var(--transition);
+}}
+.sidebar-resizer:hover::after, .sidebar-resizer.is-dragging::after {{
+  background: var(--accent);
 }}
 
 /* TOC sidebar */
 .toc-sidebar {{
+  grid-column: 1;
   position: sticky; top: 48px;
   height: calc(100vh - 48px);
   overflow-y: auto;
   padding: 28px 20px;
   border-right: 1px solid var(--border);
   background: var(--bg2);
+  width: 100%;
+  box-sizing: border-box;
+  transition: width var(--transition);
+}}
+
+.md-layout.is-dragging .toc-sidebar {{
+  transition: none !important;
 }}
 
 .toc-sidebar::-webkit-scrollbar {{ width: 4px; }}
@@ -289,11 +355,54 @@ a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
   text-decoration: none;
 }}
 
-.toc-sidebar .toc ul ul a {{ padding-left: 20px; font-size: 11px; }}
-.toc-sidebar .toc ul ul ul a {{ padding-left: 34px; }}
+.toc-sidebar .toc ul ul a {{ padding-left: 20px; font-size: 11.5px; }}
+.toc-sidebar .toc ul ul ul a {{ padding-left: 32px; font-size: 11px; }}
+.toc-sidebar .toc ul ul ul ul a {{ padding-left: 44px; font-size: 11px; }}
+.toc-sidebar .toc ul ul ul ul ul a {{ padding-left: 56px; font-size: 11px; }}
+.toc-sidebar .toc ul ul ul ul ul ul a {{ padding-left: 68px; font-size: 11px; }}
+
+/* Sidebar Control Group in Topbar */
+.sidebar-ctrl-group {{
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  overflow: hidden;
+  margin-right: 8px;
+}}
+
+.sidebar-btn {{
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  transition: var(--transition);
+  border-right: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}}
+
+.sidebar-btn:last-child {{
+  border-right: none;
+}}
+
+.sidebar-btn:hover {{
+  background: var(--bg3);
+  color: var(--text);
+}}
+
+.sidebar-btn.active {{
+  background: var(--accent);
+  color: #ffffff;
+}}
 
 /* MD content */
 .md-content-wrap {{
+  grid-column: 2;
   padding: 40px 56px 80px;
   min-width: 0;
 }}
@@ -436,10 +545,12 @@ a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
 /* ── Responsive ──────────────────────────────────── */
 @media (max-width: 768px) {{
   .md-layout {{
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
   }}
-  .toc-sidebar {{ display: none; }}
-  .md-content-wrap {{ padding: 28px 20px 60px; }}
+  .toc-sidebar {{ display: none !important; }}
+  .sidebar-resizer {{ display: none !important; }}
+  .sidebar-ctrl-group {{ display: none !important; }}
+  .md-content-wrap {{ padding: 28px 20px 60px; grid-column: 1 / span 2 !important; }}
   .container {{ padding: 20px 16px 48px; }}
 }}
 </style>
@@ -478,13 +589,87 @@ a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
         : {light_css_json};
     }}
   }};
+
+  // Sidebar controls
+  const layout = document.querySelector('.md-layout');
+  const resizer = document.querySelector('.sidebar-resizer');
+
+  if (layout) {{
+    const savedState = localStorage.getItem('mdserve-sidebar-state') || 'partial';
+    const savedWidth = localStorage.getItem('mdserve-sidebar-width') || '220px';
+
+    window.setSidebarState = function(state, width) {{
+      layout.setAttribute('data-sidebar-state', state);
+
+      document.querySelectorAll('.sidebar-btn').forEach(btn => {{
+        btn.classList.remove('active');
+      }});
+
+      const activeBtn = document.getElementById('sidebar-btn-' + state);
+      if (activeBtn) {{
+        activeBtn.classList.add('active');
+      }}
+
+      if (state === 'custom' && width) {{
+        layout.style.setProperty('--sidebar-width', width);
+        localStorage.setItem('mdserve-sidebar-width', width);
+      }} else {{
+        layout.style.removeProperty('--sidebar-width');
+      }}
+
+      localStorage.setItem('mdserve-sidebar-state', state);
+    }};
+
+    // Initialize sidebar
+    if (savedState === 'custom') {{
+      setSidebarState('custom', savedWidth);
+    }} else {{
+      setSidebarState(savedState);
+    }}
+
+    if (resizer) {{
+      let startX, startWidth;
+
+      resizer.addEventListener('mousedown', function(e) {{
+        e.preventDefault();
+        startX = e.clientX;
+        const rect = document.querySelector('.toc-sidebar').getBoundingClientRect();
+        startWidth = rect.width;
+
+        layout.classList.add('is-dragging');
+        resizer.classList.add('is-dragging');
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+      }});
+
+      function handleMouseMove(e) {{
+        const deltaX = e.clientX - startX;
+        let newWidth = startWidth + deltaX;
+
+        if (newWidth < 120) {{
+          setSidebarState('collapsed');
+        }} else {{
+          if (newWidth > 600) newWidth = 600;
+          setSidebarState('custom', newWidth + 'px');
+        }}
+      }}
+
+      function handleMouseUp() {{
+        layout.classList.remove('is-dragging');
+        resizer.classList.remove('is-dragging');
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      }}
+    }}
+  }}
 }})();
 </script>
 </body>
 </html>"""
 
 
-def _topbar(breadcrumb_html: str) -> str:
+def _topbar(breadcrumb_html: str, sidebar_controls: str = "") -> str:
     return f"""
 <header class="topbar">
   <div class="topbar-left">
@@ -492,6 +677,7 @@ def _topbar(breadcrumb_html: str) -> str:
     <nav class="breadcrumb">{breadcrumb_html}</nav>
   </div>
   <div class="topbar-right">
+    {sidebar_controls}
     <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">☀ Light</button>
   </div>
 </header>"""
@@ -666,13 +852,20 @@ def render_markdown(fs_path: Path, urlpath: str) -> str:
     toc_html = getattr(md, "toc", "")
     has_toc = bool(toc_html.strip()) and "<li>" in toc_html
 
+    sidebar_controls = ""
     sidebar = ""
     layout_class = "md-layout"
     if has_toc:
+        sidebar_controls = """<div class="sidebar-ctrl-group">
+      <button class="sidebar-btn" id="sidebar-btn-collapsed" onclick="setSidebarState('collapsed')" title="Collapse sidebar">🗙</button>
+      <button class="sidebar-btn" id="sidebar-btn-partial" onclick="setSidebarState('partial')" title="Standard width">◧</button>
+      <button class="sidebar-btn" id="sidebar-btn-expanded" onclick="setSidebarState('expanded')" title="Expanded width">◨</button>
+    </div>"""
         sidebar = f"""<aside class="toc-sidebar">
   <div class="toc-label">Contents</div>
   <nav class="toc">{toc_html}</nav>
-</aside>"""
+</aside>
+<div class="sidebar-resizer"></div>"""
     else:
         layout_class += " no-toc"
 
@@ -681,7 +874,7 @@ def render_markdown(fs_path: Path, urlpath: str) -> str:
         parent += "/"
 
     body = f"""
-{_topbar(_breadcrumb(urlpath))}
+{_topbar(_breadcrumb(urlpath), sidebar_controls)}
 <div class="{layout_class}">
   {sidebar}
   <div class="md-content-wrap">
